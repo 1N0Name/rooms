@@ -404,86 +404,193 @@ jobs:
 
 Теперь при каждом коммите/PR, затрагивающем backend, будут запускаться проверки.
 
+Да, если переходить на Docker-сценарий, то логичнее поменять весь раздел 7 под него. Ниже — готовый переписанный блок, который можно просто вставить вместо старого **«7. CD для backend на Render»**.
+
 ---
 
-## 7. CD для backend на Render
+## 7. CD для backend на Render (через Dockerfile)
 
-### 7.1. Создание сервиса на Render
+### 7.0. Создание базы данных Postgres на Render
+
+1. В панели Render выбрать **New → PostgreSQL**.
+2. Задать, например:
+
+   * **Database name**: `appdb`
+   * **User**: `appuser`
+3. Сохранить базу.
+4. На странице созданной БД найти строку подключения — **Internal Database URL** или **External Database URL** (Render показывает готовый `postgres://user:password@host:port/db`).
+5. Скопировать эту строку — она понадобится как значение переменной `DATABASE_URL` для backend-сервиса.
+
+> В самом приложении Prisma читает строку подключения именно из `DATABASE_URL`, поэтому достаточно одной переменной, без `POSTGRES_DB/USER/PASSWORD`.
+
+---
+
+### 7.1. Подготовка Dockerfile backend
+
+В директории `backend/` уже есть многостейджевый `Dockerfile`. В прод-стейдже он сейчас заканчивается так:
+
+```dockerfile
+FROM node:24-alpine AS prod
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist         ./dist
+COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/src/generated/prisma ./dist/generated/prisma
+
+USER node
+EXPOSE 3000
+CMD ["node","dist/server.js"]
+```
+
+Чтобы на Render при каждом деплое гарантированно применялись Prisma-миграции, удобнее запускать их перед стартом сервера. Для этого можно заменить последнюю строку на:
+
+```dockerfile
+CMD ["sh","-lc","npx prisma migrate deploy --schema=prisma/schema.prisma && node dist/server.js"]
+```
+
+В результате финальный прод-стейдж будет выглядеть так:
+
+```dockerfile
+FROM node:24-alpine AS prod
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist         ./dist
+COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/src/generated/prisma ./dist/generated/prisma
+
+USER node
+EXPOSE 3000
+CMD ["sh","-lc","npx prisma migrate deploy --schema=prisma/schema.prisma && node dist/server.js"]
+```
+
+Теперь при старте контейнера:
+
+1. Выполняются миграции `prisma migrate deploy` (используют `DATABASE_URL`);
+2. После успешного применения миграций запускается прод-сервер `node dist/server.js`.
+
+---
+
+### 7.2. Создание Docker Web Service на Render
 
 1. Перейти на сайт Render и авторизоваться.
 
-2. Выбрать **New → Web Service**.([Render][9])
+2. Нажать **New → Web Service**.
 
-3. Подключить GitHub-репозиторий проекта.
+3. В разделе **Source** выбрать **Build and deploy from a Git repository** и подключить репозиторий с проектом (тот самый, где лежат `frontend/` и `backend/`).
 
-4. Настроить параметры:
+4. Важные поля формы:
 
-   * **Branch**: `main` (или другая прод-ветка).
-   * **Root Directory**: `backend` (Render будет считать корнем папку backend).([Render][5])
-   * **Build Command**: `npm ci`
-   * **Start Command**: `npm start`
-   * Выбрать подходящий регион (как правило, EU).
+   * **Name** — любое осмысленное имя (например, `rooms-backend`).
+   * **Region** — ближайший регион (как правило, EU).
+   * **Branch** — `main` (или другая прод-ветка).
+   * **Root Directory**:
 
-5. Сохранить настройки и создать сервис. Render выполнит initial deploy: клонирует репозиторий, выполнит build/start и поднимет сервис по URL вида:
+     * можно оставить пустым (по умолчанию используется корень репозитория),
+     * либо указать `backend`, если нужно, чтобы автодеплой триггерился только при изменениях в `backend/**`.
+   * **Language / Runtime**: выбрать **Docker**.
+     Render в этом случае будет строить образ по Dockerfile, а не использовать нативный Node-рантайм.
 
-   `https://<имя-сервиса>.onrender.com`
+5. Нажать **Advanced** и заполнить Docker-поля:
 
-Согласно документации, Render автоматически пересобирает и деплоит web-сервисы при новых пушах в связанную ветку.([Render][5])
+   * **Dockerfile Path**:
 
-### 7.2. Вариант 1: Автодеплой “On Commit”
+     * если `Root Directory` **не задан** → `backend/Dockerfile`;
+     * если `Root Directory = backend` → `Dockerfile`.
+       Путь указывается согласно документации, если Dockerfile находится не в корне репозитория.
+   * **Docker Build Context Directory**:
 
-В настройках сервиса на Render есть режим авто-деплоя из Git.
+     * по умолчанию можно оставить `.` (корень репозитория) или `backend` — Render будет использовать этот каталог как контекст сборки для Docker.
+   * **Docker Command** — *оставить пустым*, чтобы Render использовал `CMD` из Dockerfile (тот самый, который запускает `prisma migrate deploy` и сервер).
 
-* В интерфейсе Render включается опция автоматического деплоя при каждом коммите (auto-deploy).([Render][6])
+6. В блоке **Environment Variables** добавить переменные окружения, необходимые backend’у:
 
-В этом случае:
+   * `DATABASE_URL` — строка подключения к базе из шага 7.0 (Internal или External URL).
+   * (Опционально) `NODE_ENV=production`.
 
-* GitHub Actions отвечают только за CI (тесты),
-* Render самостоятельно деплоит backend при пуше в `main`.
+   Переменные окружения будут доступны и на этапе сборки, и во время работы контейнера.
 
-### 7.3. Вариант 2: Deploy Hook + GitHub Actions
+7. В блоке **Health Check Path** указать:
 
-Чтобы деплой запускался **только после успешного CI**, можно использовать Deploy Hooks.
+   ```text
+   /api/health
+   ```
 
-**Шаги:**
+   Это маршрут, который уже реализован в коде и проверяет, что процесс жив и база отвечает (`SELECT 1`). Render будет периодически вызывать этот URL и на его основе определять готовность инстанса, обеспечивая zero-downtime-деплои.
+
+8. Нажать **Create Web Service / Deploy**.
+   Render загрузит репозиторий, соберёт Docker-образ по указанному Dockerfile и запустит контейнер. По завершении деплоя сервис станет доступен по адресу:
+
+   ```text
+   https://<имя-сервиса>.onrender.com
+   ```
+
+---
+
+### 7.3. Вариант 1: Автодеплой “On Commit”
+
+Для сервисов, которые **строят Docker-образ из Dockerfile в Git-репозитории**, Render умеет делать авто-деплой при каждом пуше в указанную ветку: на каждый новый коммит заново выполняется сборка образа и перезапуск контейнера.
+
+1. В открытом web-сервисе на Render перейти во вкладку **Settings → Build & Deploy**.
+2. Убедиться, что **Auto-Deploy** включён и стоит режим **On Commit**.
+
+В этом режиме:
+
+* GitHub Actions обеспечивает CI (сборка и тесты бэкенда);
+* при каждом пуше в `main` Render автоматически:
+
+  * подтягивает свежий код,
+  * пересобирает Docker-образ по `backend/Dockerfile`,
+  * запускает новый контейнер и проверяет `/api/health`.
+
+---
+
+### 7.4. Вариант 2: Deploy Hook + GitHub Actions
+
+Если требуется, чтобы деплой происходил **только после успешного CI**, можно использовать Deploy Hook:
 
 1. В настройках сервиса на Render открыть раздел **Deploy Hooks** и создать новый hook. Render выдаст URL вида:
 
-   `https://api.render.com/deploy/srv-XXXX?key=YYYY`
+   ```text
+   https://api.render.com/deploy/srv-XXXX?key=YYYY
+   ```
 
-   Документация Render описывает deploy hooks как способ инициировать деплой одним HTTP-запросом и прямо предлагает использовать их совместно с CI/CD средами, такими как GitHub Actions.([Render][7])
+   Документация Render описывает Deploy Hooks как способ инициировать деплой одним HTTP-запросом и предлагает использовать их совместно с CI/CD (GitHub Actions, CircleCI и т.д.).
 
-2. На GitHub в репозитории открыть **Settings → Secrets and variables → Actions** и создать секрет:
+2. В репозитории GitHub открыть **Settings → Secrets and variables → Actions** и создать секрет:
 
    * Name: `RENDER_DEPLOY_HOOK`
    * Value: скопированный URL.
 
 3. Создать workflow `.github/workflows/backend-deploy.yml`:
 
-```yaml
-name: Backend Deploy
+   ```yaml
+   name: Backend Deploy
 
-on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'backend/**'
-      - '.github/workflows/backend-ci.yml'
-      - '.github/workflows/backend-deploy.yml'
+   on:
+     push:
+       branches: [ main ]
+       paths:
+         - 'backend/**'
+         - '.github/workflows/backend-ci.yml'
+         - '.github/workflows/backend-deploy.yml'
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger Render deploy
-        run: curl -X POST "$RENDER_DEPLOY_HOOK"
-        env:
-          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
-```
+   jobs:
+     deploy:
+       runs-on: ubuntu-latest
+       steps:
+         - name: Trigger Render deploy
+           run: curl -X POST "$RENDER_DEPLOY_HOOK"
+           env:
+             RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+   ```
 
-При пуше в `main` этот workflow дергает Deploy Hook, и Render начинает деплой последнего коммита.([Render][7])
+Теперь при пуше в `main`:
 
-При необходимости можно усложнить схему: сделать так, чтобы деплой выполнялся только после успешного выполнения `backend-ci.yml` (например, разделив workflow на два и используя статусы предыдущего).
+* сначала отрабатывает `backend-ci.yml` (тесты/линтеры);
+* затем (если всё зелёное) `backend-deploy.yml` дергает Deploy Hook;
+* Render запускает новый деплой: пересобирает Docker-образ и выкатывает его на прод.
 
 ---
 
