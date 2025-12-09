@@ -60,7 +60,7 @@
 
 После настройки CI/CD работа идёт так:
 
-1. Изменения пушатся в ветку `main` репозитория на GitHub.
+1. Изменения пушатся в ветку `master` репозитория на GitHub.
 2. GitHub Actions запускает два workflow:
 
    * **Frontend CI/CD**:
@@ -75,7 +75,7 @@
      * запускает тесты.
 3. Render:
 
-   * либо автоматически деплоит backend-сервис при каждом пуше в `main` (режим auto-deploy);([Render][6])
+   * либо автоматически деплоит backend-сервис при каждом пуше в `master` (режим auto-deploy);([Render][6])
    * либо получает сигнал от GitHub Actions по Deploy Hook и запускает деплой только после успешного CI.([Render][7])
 
 Фронт ходит к backend по адресу вида:
@@ -208,11 +208,11 @@ https://github.com/<user>/<repo>.git
 В корне проекта:
 
 ```bash
-# если ветка называется main (по умолчанию в новых git версиях)
-git branch -M main
+# если ветка называется master (по умолчанию в новых git версиях)
+git branch -M master
 
 git remote add origin https://github.com/<user>/<repo>.git
-git push -u origin main
+git push -u origin master
 ```
 
 Типичная последовательность для уже написанного локального проекта (init → add → commit → remote add → push) полностью соответствует рекомендациям GitHub и практическим статьям.([GitHub Docs][3])
@@ -287,12 +287,12 @@ name: Frontend CI/CD
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
     paths:
       - 'frontend/**'
       - '.github/workflows/frontend.yml'
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
     paths:
       - 'frontend/**'
 
@@ -368,12 +368,12 @@ name: Backend CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
     paths:
       - 'backend/**'
       - '.github/workflows/backend-ci.yml'
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
     paths:
       - 'backend/**'
 
@@ -484,7 +484,7 @@ CMD ["sh","-lc","npx prisma migrate deploy --schema=prisma/schema.prisma && node
 
    * **Name** — любое осмысленное имя (например, `rooms-backend`).
    * **Region** — ближайший регион (как правило, EU).
-   * **Branch** — `main` (или другая прод-ветка).
+   * **Branch** — `master` (или другая прод-ветка).
    * **Root Directory**:
 
      * можно оставить пустым (по умолчанию используется корень репозитория),
@@ -538,7 +538,7 @@ CMD ["sh","-lc","npx prisma migrate deploy --schema=prisma/schema.prisma && node
 В этом режиме:
 
 * GitHub Actions обеспечивает CI (сборка и тесты бэкенда);
-* при каждом пуше в `main` Render автоматически:
+* при каждом пуше в `master` Render автоматически:
 
   * подтягивает свежий код,
   * пересобирает Docker-образ по `backend/Dockerfile`,
@@ -570,7 +570,7 @@ CMD ["sh","-lc","npx prisma migrate deploy --schema=prisma/schema.prisma && node
 
    on:
      push:
-       branches: [ main ]
+       branches: [ master ]
        paths:
          - 'backend/**'
          - '.github/workflows/backend-ci.yml'
@@ -586,7 +586,7 @@ CMD ["sh","-lc","npx prisma migrate deploy --schema=prisma/schema.prisma && node
              RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
    ```
 
-Теперь при пуше в `main`:
+Теперь при пуше в `master`:
 
 * сначала отрабатывает `backend-ci.yml` (тесты/линтеры);
 * затем (если всё зелёное) `backend-deploy.yml` дергает Deploy Hook;
@@ -651,7 +651,7 @@ app.use(cors({
    * прогоняет проверки backend.
 3. Render деплоит обновлённый backend:
 
-   * либо автоматически при каждой коммите в `main`,
+   * либо автоматически при каждой коммите в `master`,
    * либо по сигналу Deploy Hook из GitHub Actions после успешного CI.
 4. Фронтенд на GitHub Pages обращается к backend-API на Render по заранее настроенному URL.
 
